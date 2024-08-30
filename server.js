@@ -1,4 +1,5 @@
 const express = require('express');
+const nodemailer = require('nodemailer');
 const setupProviders = require('./EmailProvider');
 const EmailService = require('./EmailService');
 
@@ -6,6 +7,11 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 app.use(express.json());
+
+const MAX_REQUESTS = 3;
+const TIME_WINDOW = 60 * 1000;
+
+const ipRequests = {};
 
 async function startServer() {
   const providers = await setupProviders();
@@ -25,59 +31,72 @@ async function startServer() {
 
     try {
       await emailService.sendEmail(emailOptions);
+
       res.status(200).send('Email sent successfully!');
     } catch (error) {
       res.status(500).send('Failed to send email: ' + error.message);
     }
   });
 
-  // 2. rate-limit example which will definitely trigger rate limit
+  // 2. rate-limit example
   app.post('/send-email-rate-limit', async (req, res) => {
+    const ip = req.ip;
+    const currentTime = Date.now();
+
+    if (!ipRequests[ip]) {
+      ipRequests[ip] = {
+        count: 1,
+        startTime: currentTime,
+      };
+    } else {
+      const timePassed = currentTime - ipRequests[ip].startTime;
+
+      if (timePassed > TIME_WINDOW) {
+        ipRequests[ip].count = 1;
+        ipRequests[ip].startTime = currentTime;
+      } else {
+        ipRequests[ip].count += 1;
+      }
+
+      if (ipRequests[ip].count > MAX_REQUESTS) {
+        return res
+          .status(429)
+          .json({ error: 'Rate limit exceeded. Try again after 60 seconds' });
+      }
+    }
+
+    const { id, from, to, subject, text } = req.body;
+
     const emailOptions = {
-      id: 'email-id-rate-limit',
-      from: '"Rate limit test" <sender@example.com>',
-      to: 'recipient1@example.com',
-      subject: 'Rate Limiting test',
-      text: 'This email is to test the rate limiting mechanism.',
+      id,
+      from,
+      to,
+      subject,
+      text,
     };
 
     try {
       await emailService.sendEmail(emailOptions);
-      await emailService.sendEmail(emailOptions);
-      await emailService.sendEmail(emailOptions);
+      res.status(200).send('Email sent successfully!');
 
-      res.status(200).send('Rate limiting test completed!');
+      //res.status(200).send('Rate limiting test completed!');
     } catch (error) {
-      res.status(500).send('Failed during rate limit test: ' + error.message);
+      res.status(500).send('Rate limit exceeded' + error.message);
     }
   });
 
-  //3. fallback to second provider
-  app.post('/send-email-fallback', async (req, res) => {
-    const emailOptions = {
-      id: 'email-id-fallback',
-      from: '"Fallback test" <sender@example.com>',
-      to: 'recipient2@example.com',
-      subject: 'Fallback test',
-      text: 'This email is to test the fallback mechanism.',
-    };
 
-    try {
-      await emailService.sendEmail(emailOptions);
-      res.status(200).send('Fallback test completed!');
-    } catch (error) {
-      res.status(500).send('Failed during fallback test: ' + error.message);
-    }
-  });
 
-  // 4. retry mechanism with exponential backoff
+  // 3. retry mechanism with exponential backoff
   app.post('/send-email-retry', async (req, res) => {
+    const { id, from, to, subject, text } = req.body;
+
     const emailOptions = {
-      id: 'email-id-retry',
-      from: '"Retry test" <sender@example.com>',
-      to: 'recipient3@example.com',
-      subject: 'Retry Mechanism test',
-      text: 'This email is to test the retry mechanism',
+      id,
+      from,
+      to,
+      subject,
+      text,
     };
 
     try {
@@ -88,7 +107,7 @@ async function startServer() {
     }
   });
 
-  // 5.status tracking
+  // 4.status tracking
   app.get('/status-tracking', (req, res) => {
     res.status(200).json(emailService.statusTracking);
   });

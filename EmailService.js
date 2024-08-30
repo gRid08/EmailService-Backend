@@ -9,7 +9,6 @@ class EmailService {
     this.currentProviderIndex = 0;
     this.currentRetries = 0;
     this.maxRetries = 3;
-    this.rateLimitPerSecond = 1;
     this.lastSentTime = 0;
     this.sentEmails = new Set();
     this.statusTracking = [];
@@ -29,21 +28,17 @@ class EmailService {
 
   async sendEmail(emailOptions) {
     if (this.sentEmails.has(emailOptions.id)) {
-      console.log('Duplicate email detected. Aborting send.');
+      console.log('Duplicate email detected.');
       return;
     }
 
     this.sentEmails.add(emailOptions.id);
 
-    if (this.rateLimitExceeded()) {
-      console.log('Rate limit exceeded. Waiting to retry...');
-      await this.delay(1000);
-    }
-
     while (this.currentRetries <= this.maxRetries) {
       try {
         const provider = this.providers[this.currentProviderIndex];
-        await provider.sendMail(emailOptions);
+        const info = await provider.sendMail(emailOptions);
+        console.log('Preview URL: %s', nodemailer.getTestMessageUrl(info));
         console.log('Email sent successfully!');
         this.statusTracking.push({
           emailId: emailOptions.id,
@@ -63,25 +58,21 @@ class EmailService {
         });
 
         if (this.currentRetries >= this.maxRetries) {
-          console.log('Max retries reached. Switching provider...');
+          console.log('Max retries reached. Stopping service.');
           this.switchProvider();
-          this.currentRetries = 0;
+          return;
+          //this.currentRetries = 0;
         } else {
           console.log(
             `Retrying... Attempt ${
               this.currentRetries + 1
-            } with exponential backoff.`
+            } with exponential backoff ${this.getExponentialBackoffDelay()}`
           );
           this.currentRetries++;
           await this.delay(this.getExponentialBackoffDelay());
         }
       }
     }
-  }
-
-  rateLimitExceeded() {
-    const timeSinceLastSend = Date.now() - this.lastSentTime;
-    return timeSinceLastSend < 1000 / this.rateLimitPerSecond;
   }
 
   delay(ms) {
